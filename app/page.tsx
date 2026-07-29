@@ -3,10 +3,11 @@
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useEffect, useRef, useState } from "react";
-import type { Coordinate, CurveSegment } from "../lib/curves";
+import { colorizeRoute, curveMidpoint, type Coordinate, type CurveSegment } from "../lib/curves";
 
-type RouteResult = { id: string; coordinates: Coordinate[]; distanceMeters: number; durationSeconds: number; curves: CurveSegment[] };
-const metres = (value: number) => value >= 1000 ? `${(value / 1000).toFixed(1)} km` : `${value} m`;
+type RouteResult = { id: string; coordinates: Coordinate[]; distanceMeters: number; durationSeconds: number; curves: CurveSegment[]; speedLimits?: string[] };
+const metres = (value: number) => `${Math.round(value)} m`;
+const miles = (value: number) => `${(value / 1609.344).toFixed(1)} mi`;
 const duration = (value: number) => `${Math.floor(value / 60)} min`;
 
 export default function Home() {
@@ -24,6 +25,8 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showWaypoints, setShowWaypoints] = useState(true);
+  const [showCurveMarkers, setShowCurveMarkers] = useState(true);
   const route = routes[routeIndex];
 
   useEffect(() => {
@@ -34,15 +37,20 @@ export default function Home() {
     const map = mapRef.current;
     if (!map) return;
     stopMarkers.current.forEach((marker) => marker.remove());
-    stopMarkers.current = nextStops.map((stop, index) => {
+    stopMarkers.current = nextStops.flatMap((stop, index) => {
+      if (index > 0 && index < nextStops.length - 1 && !showWaypoints) return [];
       const element = document.createElement("button");
       element.type = "button";
       element.className = `route-stop ${index === 0 ? "start" : index === nextStops.length - 1 ? "end" : "via"}`;
       element.setAttribute("aria-label", index === 0 ? "Route start" : index === nextStops.length - 1 ? "Route end" : `Waypoint ${index}`);
       element.onclick = (event) => { event.stopPropagation(); removeStop(index); };
-      return new mapboxgl.Marker({ element }).setLngLat(stop).addTo(map);
+      return [new mapboxgl.Marker({ element }).setLngLat(stop).addTo(map)];
     });
   }
+
+  // Marker visibility is a presentation-only toggle; the current points live in a ref.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { renderStopMarkers(stopsRef.current); }, [showWaypoints]);
 
   async function routeStops(nextStops: Coordinate[]) {
     if (nextStops.length < 2) return;
@@ -75,7 +83,7 @@ export default function Home() {
     stopsRef.current = nextStops; setStops(nextStops); setSelectedId(null); renderStopMarkers(nextStops);
     if (nextStops.length < 2) {
       setRoutes([]); setRouteIndex(0);
-      const source = mapRef.current?.getSource("route") as mapboxgl.GeoJSONSource | undefined;
+      const source = mapRef.current?.getSource("route-segments") as mapboxgl.GeoJSONSource | undefined;
       source?.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } });
     } else void routeStops(nextStops);
   }
@@ -94,10 +102,10 @@ export default function Home() {
     stopsRef.current = []; setStops([]); setRoutes([]); setRouteIndex(0); setSelectedId(null); setError("");
     stopMarkers.current.forEach((marker) => marker.remove()); stopMarkers.current = [];
     curveMarkers.current.forEach((marker) => marker.remove()); curveMarkers.current = [];
-    const source = mapRef.current?.getSource("route") as mapboxgl.GeoJSONSource | undefined;
+    const source = mapRef.current?.getSource("route-segments") as mapboxgl.GeoJSONSource | undefined;
     source?.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } });
-    const curvesSource = mapRef.current?.getSource("curve-segments") as mapboxgl.GeoJSONSource | undefined;
-    curvesSource?.setData({ type: "FeatureCollection", features: [] });
+    const routeSegmentsSource = mapRef.current?.getSource("route-segments") as mapboxgl.GeoJSONSource | undefined;
+    routeSegmentsSource?.setData({ type: "FeatureCollection", features: [] });
   }
 
   useEffect(() => {
@@ -108,13 +116,11 @@ export default function Home() {
     const map = new mapboxgl.Map({ container: mapNode.current, style: "mapbox://styles/mapbox/streets-v12", center: [-122.4194, 37.7749], zoom: 10, attributionControl: false });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "bottom-right");
     map.on("load", () => {
-      map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
-      map.addLayer({ id: "route-line", type: "line", source: "route", paint: { "line-color": "#101b1e", "line-width": 5, "line-opacity": .94 } });
-      map.addSource("curve-segments", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({ id: "curve-line", type: "line", source: "curve-segments", paint: { "line-color": ["match", ["get", "direction"], "left", "#2878ee", "right", "#e34242", "#101b1e"], "line-width": 6, "line-opacity": .98 } });
+      map.addSource("route-segments", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({ id: "route-line", type: "line", source: "route-segments", paint: { "line-color": ["match", ["get", "color"], "blue", "#2878ee", "red", "#e34242", "#101b1e"], "line-width": 6, "line-opacity": .98 } });
       map.on("click", (event) => {
-        const curveFeature = map.queryRenderedFeatures(event.point, { layers: ["curve-line"] })[0];
-        const curveId = curveFeature?.properties?.id as string | undefined;
+        const curveFeature = map.queryRenderedFeatures(event.point, { layers: ["route-line"] })[0];
+        const curveId = curveFeature?.properties?.curveId as string | undefined;
         const curve = routeRef.current?.curves.find((item) => item.id === curveId);
         if (curve) selectCurve(curve); else addStop([event.lngLat.lng, event.lngLat.lat]);
       });
@@ -131,21 +137,41 @@ export default function Home() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !route || !map.isStyleLoaded()) return;
-    const source = map.getSource("route") as mapboxgl.GeoJSONSource | undefined;
-    source?.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: route.coordinates } });
-    const curvesSource = map.getSource("curve-segments") as mapboxgl.GeoJSONSource | undefined;
-    curvesSource?.setData({ type: "FeatureCollection", features: route.curves.map((curve) => ({ type: "Feature", properties: { id: curve.id, direction: curve.direction }, geometry: { type: "LineString", coordinates: curve.coordinates } })) });
+    const source = map.getSource("route-segments") as mapboxgl.GeoJSONSource | undefined;
+    source?.setData({ type: "FeatureCollection", features: colorizeRoute(route.coordinates, route.curves).map((segment) => ({ type: "Feature", properties: { curveId: segment.curveId, color: segment.color }, geometry: { type: "LineString", coordinates: segment.coordinates } })) });
     curveMarkers.current.forEach((marker) => marker.remove());
-    curveMarkers.current = route.curves.map((curve, index) => {
+    curveMarkers.current = showCurveMarkers ? route.curves.map((curve, index) => {
       const element = document.createElement("button"); element.className = "curve-marker"; element.innerText = String(index + 1);
       element.onclick = (event) => { event.stopPropagation(); selectCurve(curve); };
-      return new mapboxgl.Marker({ element }).setLngLat(curve.start).addTo(map);
-    });
-  }, [route]);
+      return new mapboxgl.Marker({ element }).setLngLat(curveMidpoint(curve)).addTo(map);
+    }) : [];
+  }, [route, showCurveMarkers]);
 
   function selectCurve(curve: CurveSegment) {
     setSelectedId(curve.id);
     mapRef.current?.fitBounds(new mapboxgl.LngLatBounds(curve.start, curve.end), { padding: 120, maxZoom: 15, duration: 450 });
+  }
+
+  function exportRoute() {
+    const map = mapRef.current;
+    if (!map || !route) return;
+    const mapCanvas = map.getCanvas();
+    const width = 1600;
+    const mapHeight = Math.round((mapCanvas.height / mapCanvas.width) * width);
+    const rows = route.curves.slice(0, 24);
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = mapHeight + 170 + rows.length * 42;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = "#f0f0e8"; context.fillRect(0, 0, width, canvas.height);
+    context.drawImage(mapCanvas, 0, 0, width, mapHeight);
+    context.fillStyle = "#102023"; context.fillRect(0, mapHeight, width, canvas.height - mapHeight);
+    context.fillStyle = "#dbff52"; context.font = "700 28px sans-serif"; context.fillText("APEX PACE NOTES", 54, mapHeight + 54);
+    context.fillStyle = "#eaf0e9"; context.font = "600 22px sans-serif"; context.fillText(`${miles(route.distanceMeters)} · ${duration(route.durationSeconds)} · ${route.curves.length} curves`, 54, mapHeight + 94);
+    if (route.speedLimits?.length) context.fillText(`Speed limits: ${route.speedLimits.join(" → ")}`, 54, mapHeight + 124);
+    context.font = "500 20px sans-serif";
+    rows.forEach((curve, index) => context.fillText(`${String(index + 1).padStart(2, "0")}  ${curve.label.toUpperCase()}  ·  ${metres(curve.lengthMeters)}  ·  ${Math.round(curve.headingChangeDegrees)}°`, 54, mapHeight + 165 + index * 42));
+    const link = document.createElement("a"); link.download = "apex-pace-notes.png"; link.href = canvas.toDataURL("image/png"); link.click();
   }
 
   const selected = route?.curves.find((curve) => curve.id === selectedId);
@@ -165,12 +191,14 @@ export default function Home() {
     <section className="map-area">
       <div ref={mapNode} className="map" aria-label="Route map. Click to place route points." />
       {tokenLoaded && !mapToken && <div className="map-placeholder"><span>MAPBOX REQUIRED</span><p>Add the project’s Mapbox environment variables to enable map clicks and route planning.</p></div>}
-      {route && <div className="route-summary"><span>FASTEST ROUTE</span><strong>{metres(route.distanceMeters)} <i>·</i> {duration(route.durationSeconds)}</strong><small>{route.curves.length} detected curves</small>{routes.length > 1 && <select value={routeIndex} onChange={(event) => { setRouteIndex(Number(event.target.value)); setSelectedId(null); }} aria-label="Choose route alternative">{routes.map((option, index) => <option value={index} key={option.id}>Option {index + 1} · {duration(option.durationSeconds)}</option>)}</select>}</div>}
-      {selected && <article className="curve-card"><span>CURVE {route!.curves.findIndex((curve) => curve.id === selected.id) + 1}</span><h2>{selected.label}</h2><dl><div><dt>Length</dt><dd>{metres(selected.lengthMeters)}</dd></div><div><dt>Heading</dt><dd>{selected.headingChangeDegrees}°</dd></div><div><dt>Modifier</dt><dd>None</dd></div></dl></article>}
+      {route && <div className="route-summary"><span>FASTEST ROUTE</span><strong>{miles(route.distanceMeters)} <i>·</i> {duration(route.durationSeconds)}</strong><small>{route.curves.length} detected curves</small>{route.speedLimits?.length ? <small>Limits: {route.speedLimits.join(" → ")}</small> : null}{routes.length > 1 && <select value={routeIndex} onChange={(event) => { setRouteIndex(Number(event.target.value)); setSelectedId(null); }} aria-label="Choose route alternative">{routes.map((option, index) => <option value={index} key={option.id}>Option {index + 1} · {duration(option.durationSeconds)}</option>)}</select>}</div>}
+      <details className="layers"><summary>Layers</summary><label><input type="checkbox" checked={showWaypoints} onChange={(event) => setShowWaypoints(event.target.checked)} /> Waypoints</label><label><input type="checkbox" checked={showCurveMarkers} onChange={(event) => setShowCurveMarkers(event.target.checked)} /> Pace numbers</label></details>
+      {route && <button className="export-route" onClick={exportRoute}>Export route PNG</button>}
+      {selected && <article className="curve-card"><span>CURVE {route!.curves.findIndex((curve) => curve.id === selected.id) + 1}</span><h2>{selected.label}</h2><dl><div><dt>Length</dt><dd>{metres(selected.lengthMeters)}</dd></div><div><dt>Heading</dt><dd>{Math.round(selected.headingChangeDegrees)}°</dd></div><div><dt>Modifier</dt><dd>None</dd></div></dl></article>}
     </section>
     <aside className="curve-list" aria-label="Detected curves">
       <div className="list-heading"><span>PACE NOTES</span><strong>{route ? `${route.curves.length} calls` : "Awaiting route"}</strong></div>
-      <div className="scrolling-notes">{route ? route.curves.map((curve, index) => <button key={curve.id} className={selectedId === curve.id ? "curve-row active" : "curve-row"} onClick={() => selectCurve(curve)}><b>{String(index + 1).padStart(2, "0")}</b><span><strong>{curve.label}</strong><small>{metres(curve.lengthMeters)} · {curve.headingChangeDegrees}°</small></span><i>{curve.direction === "left" ? "↙" : "↘"}</i></button>) : <div className="empty-list">Your route’s curve calls will appear here in driving order.</div>}</div>
+      <div className="scrolling-notes">{route ? route.curves.map((curve, index) => <button key={curve.id} className={selectedId === curve.id ? "curve-row active" : "curve-row"} onClick={() => selectCurve(curve)}><b>{String(index + 1).padStart(2, "0")}</b><span><strong>{curve.label}</strong><small>{metres(curve.lengthMeters)} · {Math.round(curve.headingChangeDegrees)}°</small></span><i>{curve.direction === "left" ? "↙" : "↘"}</i></button>) : <div className="empty-list">Your route’s curve calls will appear here in driving order.</div>}</div>
     </aside>
   </main>;
 }

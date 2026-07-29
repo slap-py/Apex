@@ -25,6 +25,12 @@ export interface CurveSegment {
   modifier: null;
 }
 
+export interface RouteDisplaySegment {
+  coordinates: Coordinate[];
+  color: "black" | "blue" | "red";
+  curveId?: string;
+}
+
 export const defaultCurveAnalysisOptions: CurveAnalysisOptions = {
   sampleDistanceMeters: 14,
   minimumCurveLengthMeters: 32,
@@ -144,4 +150,37 @@ export function analyzeCurves(input: Coordinate[], options: Partial<CurveAnalysi
       modifier: null,
     }];
   });
+}
+
+/**
+ * Splits the original provider geometry into non-overlapping display segments.
+ * This intentionally never draws the resampled analysis geometry on the map.
+ */
+export function colorizeRoute(coordinates: Coordinate[], curves: CurveSegment[]): RouteDisplaySegment[] {
+  if (coordinates.length < 2) return [];
+  let total = 0;
+  const distances = coordinates.map((point, index) => {
+    if (index > 0) total += distanceMeters(coordinates[index - 1], point);
+    return total;
+  });
+  const colorAt = (distance: number) => {
+    const curve = curves.find((item) => distance >= item.routeStartMeters && distance <= item.routeEndMeters);
+    return curve ? { color: curve.direction === "left" ? "blue" as const : "red" as const, curveId: curve.id } : { color: "black" as const };
+  };
+  const segments: RouteDisplaySegment[] = [];
+  let active = { ...colorAt((distances[0] + distances[1]) / 2), coordinates: [coordinates[0], coordinates[1]] };
+  for (let index = 2; index < coordinates.length; index += 1) {
+    const next = colorAt((distances[index - 1] + distances[index]) / 2);
+    if (next.color === active.color && next.curveId === active.curveId) active.coordinates.push(coordinates[index]);
+    else {
+      segments.push(active);
+      active = { ...next, coordinates: [coordinates[index - 1], coordinates[index]] };
+    }
+  }
+  segments.push(active);
+  return segments;
+}
+
+export function curveMidpoint(curve: CurveSegment): Coordinate {
+  return curve.coordinates[Math.floor(curve.coordinates.length / 2)] || curve.start;
 }
