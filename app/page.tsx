@@ -14,6 +14,8 @@ export default function Home() {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapNode = useRef<HTMLDivElement | null>(null);
   const markers = useRef<mapboxgl.Marker[]>([]);
+  const [mapToken, setMapToken] = useState<string | null>(null);
+  const [tokenLoaded, setTokenLoaded] = useState(false);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [waypoints, setWaypoints] = useState<string[]>([]);
@@ -22,12 +24,19 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const token = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
   const route = routes[routeIndex];
 
   useEffect(() => {
-    if (!mapNode.current || !token || mapRef.current) return;
-    mapboxgl.accessToken = token;
+    fetch("/api/config/mapbox")
+      .then((response) => response.json())
+      .then((data: { token?: string | null }) => setMapToken(data.token || null))
+      .catch(() => setMapToken(null))
+      .finally(() => setTokenLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    if (!mapNode.current || !mapToken || mapRef.current) return;
+    mapboxgl.accessToken = mapToken;
     const map = new mapboxgl.Map({ container: mapNode.current, style: "mapbox://styles/mapbox/navigation-night-v1", center: [-122.4194, 37.7749], zoom: 10, attributionControl: false });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "bottom-right");
     map.on("load", () => {
@@ -37,7 +46,7 @@ export default function Home() {
     });
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
-  }, [token]);
+  }, [mapToken]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -92,11 +101,11 @@ export default function Home() {
         <button className="plan" disabled={loading}>{loading ? "Reading road geometry…" : "Generate pace notes"}</button>
       </form>
       {error && <p className="error" role="alert">{error}</p>}
-      <p className="setup-note">{token ? "Map ready — routes are analyzed on demand." : "Add Mapbox tokens to enable the live map and routing."}</p>
+      <p className="setup-note">{mapToken ? "Map ready — routes are analyzed on demand." : "Add Mapbox tokens to enable the live map and routing."}</p>
     </section>
     <section className="map-area">
       <div ref={mapNode} className="map" aria-label="Route map" />
-      {!token && <div className="map-placeholder"><span>MAPBOX REQUIRED</span><p>Set <code>NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN</code> and <code>MAPBOX_ACCESS_TOKEN</code> to start planning.</p></div>}
+      {tokenLoaded && !mapToken && <div className="map-placeholder"><span>MAPBOX REQUIRED</span><p>Set <code>NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN</code> and <code>MAPBOX_ACCESS_TOKEN</code> to start planning.</p></div>}
       {route && <div className="route-summary"><span>FASTEST ROUTE</span><strong>{metres(route.distanceMeters)} <i>·</i> {duration(route.durationSeconds)}</strong><small>{route.curves.length} detected curves</small>{routes.length > 1 && <select value={routeIndex} onChange={(event) => { setRouteIndex(Number(event.target.value)); setSelectedId(null); }} aria-label="Choose route alternative">{routes.map((option, index) => <option value={index} key={option.id}>Option {index + 1} · {duration(option.durationSeconds)}</option>)}</select>}</div>}
       {selected && <article className="curve-card"><span>CURVE {route!.curves.findIndex((curve) => curve.id === selected.id) + 1}</span><h2>{selected.label}</h2><dl><div><dt>Length</dt><dd>{metres(selected.lengthMeters)}</dd></div><div><dt>Heading change</dt><dd>{selected.headingChangeDegrees}°</dd></div><div><dt>Modifier</dt><dd>None</dd></div></dl><p>Score {selected.rating} · curvature {selected.averageCurvature}°/m</p></article>}
     </section>
