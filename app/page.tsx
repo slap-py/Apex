@@ -185,9 +185,13 @@ export default function Home() {
     mapRef.current?.fitBounds(new mapboxgl.LngLatBounds(curve.start, curve.end), { padding: 120, maxZoom: 15, duration: 450 });
   }
 
-  function exportRoute() {
+  async function exportRoute() {
     const map = mapRef.current;
     if (!map || !route) return;
+    const previousCenter = map.getCenter(); const previousZoom = map.getZoom(); const previousBearing = map.getBearing(); const previousPitch = map.getPitch();
+    const bounds = route.coordinates.reduce((box, coordinate) => box.extend(coordinate), new mapboxgl.LngLatBounds(route.coordinates[0], route.coordinates[0]));
+    map.fitBounds(bounds, { padding: 90, duration: 0 });
+    await new Promise<void>((resolve) => map.once("idle", () => resolve()));
     const mapCanvas = map.getCanvas();
     const width = 1600;
     const mapHeight = Math.round((mapCanvas.height / mapCanvas.width) * width);
@@ -208,6 +212,7 @@ export default function Home() {
     const columnWidth = Math.floor((width - 108) / columns);
     rows.forEach((curve, index) => { const column = index % columns; const row = Math.floor(index / columns); context.fillText(`${String(index + 1).padStart(2, "0")} ${curve.label.toUpperCase()} · ${metres(curve.lengthMeters)} · ${Math.round(curve.headingChangeDegrees)}°`, 54 + column * columnWidth, mapHeight + 145 + row * rowHeight); });
     const link = document.createElement("a"); link.download = "apex-pace-notes.png"; link.href = canvas.toDataURL("image/png"); link.click();
+    map.jumpTo({ center: previousCenter, zoom: previousZoom, bearing: previousBearing, pitch: previousPitch });
   }
 
   const selected = route?.curves.find((curve) => curve.id === selectedId);
@@ -228,7 +233,8 @@ export default function Home() {
       <div ref={mapNode} className="map" aria-label="Route map. Click to place route points." />
       {tokenLoaded && !mapToken && <div className="map-placeholder"><span>MAPBOX REQUIRED</span><p>Add the project’s Mapbox environment variables to enable map clicks and route planning.</p></div>}
       {route && <div className="route-summary"><span>FASTEST ROUTE</span><strong>{miles(route.distanceMeters)} <i>·</i> {duration(route.durationSeconds)}</strong><small>{route.curves.length} detected curves</small>{routes.length > 1 && <select value={routeIndex} onChange={(event) => { setRouteIndex(Number(event.target.value)); setElevationIndex(0); setSelectedId(null); }} aria-label="Choose route alternative">{routes.map((option, index) => <option value={index} key={option.id}>Option {index + 1} · {duration(option.durationSeconds)}</option>)}</select>}</div>}
-      <details className="layers"><summary>Layers</summary><label><input type="checkbox" checked={showWaypoints} onChange={(event) => setShowWaypoints(event.target.checked)} /> Waypoints</label><label><input type="checkbox" checked={showCurveMarkers} onChange={(event) => setShowCurveMarkers(event.target.checked)} /> Pace numbers</label><label><input type="checkbox" checked={showMapRallyLabels} onChange={(event) => setShowMapRallyLabels(event.target.checked)} /> Map rally labels</label></details>
+      <details className="layers"><summary>Layers</summary><label><input type="checkbox" checked={showWaypoints} onChange={(event) => setShowWaypoints(event.target.checked)} /> Waypoints</label><label><input type="checkbox" checked={showCurveMarkers} onChange={(event) => setShowCurveMarkers(event.target.checked)} /> Pace numbers</label></details>
+      <button className="rally-toggle" onClick={() => setShowMapRallyLabels((visible) => !visible)}>{showMapRallyLabels ? "Show curve numbers" : "Show rally labels"}</button>
       {route && <button className="export-route" onClick={exportRoute}>Export route PNG</button>}
       {route?.elevations?.length ? <div className="elevation-card"><span>ELEVATION PROFILE</span><strong className="elevation-readout">{feet(route.elevations[elevationIndex] ?? route.elevations[0])} ft</strong><svg viewBox="0 0 300 74" role="img" aria-label="Elevation profile" onMouseMove={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setElevationIndex(Math.max(0, Math.min(route.elevations!.length - 1, Math.round(((event.clientX - rect.left) / rect.width) * (route.elevations!.length - 1))))); }}><polyline points={route.elevations.map((value, index) => `${(index / Math.max(1, route.elevations!.length - 1)) * 300},${70 - ((value - Math.min(...route.elevations!)) / Math.max(1, Math.max(...route.elevations!) - Math.min(...route.elevations!))) * 58}`).join(" ")} /><circle cx={(elevationIndex / Math.max(1, route.elevations.length - 1)) * 300} cy={70 - ((route.elevations[elevationIndex] - Math.min(...route.elevations)) / Math.max(1, Math.max(...route.elevations) - Math.min(...route.elevations))) * 58} r="5" /></svg><small>Hover the profile to scrub</small></div> : null}
       {selected && <article className="curve-card"><span>CURVE {route!.curves.findIndex((curve) => curve.id === selected.id) + 1}</span><h2>{selected.label}{curveModifier(selected) === "D" ? " dip" : curveModifier(selected) === "B" ? " bump" : ""}</h2><dl><div><dt>Length</dt><dd>{metres(selected.lengthMeters)}</dd></div><div><dt>Heading</dt><dd>{Math.round(selected.headingChangeDegrees)}°</dd></div><div><dt>Modifier</dt><dd>{curveModifier(selected) === "D" ? "Dip" : curveModifier(selected) === "B" ? "Bump" : "None"}</dd></div></dl></article>}

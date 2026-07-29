@@ -23,15 +23,14 @@ async function fetchElevation(coordinates: Coordinate[]): Promise<number[]> {
 
 async function fetchRoadEvents(coordinates: Coordinate[]): Promise<RoadEvent[]> {
   if (coordinates.length < 2) return [];
-  const stride = Math.max(1, Math.floor(coordinates.length / 24));
-  const samples = coordinates.filter((_, index) => index % stride === 0).slice(0, 24);
-  const around = samples.map(([lon, lat]) => `node(around:35,${lat},${lon})[highway~"^(stop|traffic_signals)$"];way(around:50,${lat},${lon})[highway~"^(primary|secondary|tertiary)$"][name];`).join("");
-  const query = `[out:json][timeout:12];(${around});out center tags;`;
+  const lons = coordinates.map(([lon]) => lon); const lats = coordinates.map(([, lat]) => lat);
+  const pad = 0.003; const bbox = `${Math.min(...lats) - pad},${Math.min(...lons) - pad},${Math.max(...lats) + pad},${Math.max(...lons) + pad}`;
+  const query = `[out:json][timeout:20];(node["highway"~"^(stop|traffic_signals)$"](${bbox});way["highway"~"^(primary|secondary|tertiary)$"]["name"](${bbox}););out center tags;`;
   try {
     let data: { elements?: Array<{ id: number; type: string; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: { highway?: string; name?: string } }> } | null = null;
-    for (const endpoint of ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]) {
+    for (const endpoint of ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://overpass.private.coffee/api/interpreter"]) {
       try {
-        const response = await fetch(endpoint, { method: "POST", body: query, headers: { "Content-Type": "text/plain" } });
+        const response = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`);
         if (response.ok) { data = await response.json() as typeof data; break; }
       } catch { /* try the fallback endpoint */ }
     }
@@ -75,8 +74,8 @@ export async function POST(request: Request) {
     if (!data.routes?.length) throw new Error("No driving route was found.");
     const snappedStops = data.waypoints?.map((waypoint) => waypoint.location).filter((location): location is Coordinate => Boolean(location)) || stops;
     const events = await fetchRoadEvents(data.routes[0].geometry.coordinates);
-    const elevations = await fetchElevation(data.routes[0].geometry.coordinates);
-    return NextResponse.json({ snappedStops, roadEvents: events, routes: data.routes.map((route, index) => ({ id: `route-${index + 1}`, coordinates: route.geometry.coordinates, distanceMeters: Math.round(route.distance), durationSeconds: Math.round(route.duration), curves: analyzeCurves(route.geometry.coordinates), elevations: index === 0 ? elevations : [] })) });
+    const elevations = await Promise.all(data.routes.map((route) => fetchElevation(route.geometry.coordinates)));
+    return NextResponse.json({ snappedStops, roadEvents: events, routes: data.routes.map((route, index) => ({ id: `route-${index + 1}`, coordinates: route.geometry.coordinates, distanceMeters: Math.round(route.distance), durationSeconds: Math.round(route.duration), curves: analyzeCurves(route.geometry.coordinates), elevations: elevations[index] || [] })) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to analyze route." }, { status: 500 });
   }
