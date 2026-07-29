@@ -15,6 +15,7 @@ export default function Home() {
   const curveMarkers = useRef<mapboxgl.Marker[]>([]);
   const stopMarkers = useRef<mapboxgl.Marker[]>([]);
   const stopsRef = useRef<Coordinate[]>([]);
+  const undoRef = useRef<() => void>(() => {});
   const [mapToken, setMapToken] = useState<string | null>(null);
   const [tokenLoaded, setTokenLoaded] = useState(false);
   const [stops, setStops] = useState<Coordinate[]>([]);
@@ -34,9 +35,11 @@ export default function Home() {
     if (!map) return;
     stopMarkers.current.forEach((marker) => marker.remove());
     stopMarkers.current = nextStops.map((stop, index) => {
-      const element = document.createElement("span");
+      const element = document.createElement("button");
+      element.type = "button";
       element.className = `route-stop ${index === 0 ? "start" : index === nextStops.length - 1 ? "end" : "via"}`;
       element.setAttribute("aria-label", index === 0 ? "Route start" : index === nextStops.length - 1 ? "Route end" : `Waypoint ${index}`);
+      element.onclick = (event) => { event.stopPropagation(); removeStop(index); };
       return new mapboxgl.Marker({ element }).setLngLat(stop).addTo(map);
     });
   }
@@ -46,8 +49,13 @@ export default function Home() {
     setError(""); setLoading(true); setSelectedId(null);
     try {
       const response = await fetch("/api/routes/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stops: nextStops }) });
-      const result = await response.json() as { routes?: RouteResult[]; error?: string };
+      const result = await response.json() as { routes?: RouteResult[]; snappedStops?: Coordinate[]; error?: string };
       if (!response.ok || !result.routes) throw new Error(result.error || "Unable to snap this route to roads.");
+      if (result.snappedStops?.length === nextStops.length) {
+        stopsRef.current = result.snappedStops;
+        setStops(result.snappedStops);
+        renderStopMarkers(result.snappedStops);
+      }
       setRoutes(result.routes); setRouteIndex(0);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to snap this route to roads."); }
     finally { setLoading(false); }
@@ -61,12 +69,35 @@ export default function Home() {
     void routeStops(nextStops);
   }
 
+  function removeStop(index: number) {
+    if (index < 0 || index >= stopsRef.current.length) return;
+    const nextStops = stopsRef.current.filter((_, stopIndex) => stopIndex !== index);
+    stopsRef.current = nextStops; setStops(nextStops); setSelectedId(null); renderStopMarkers(nextStops);
+    if (nextStops.length < 2) {
+      setRoutes([]); setRouteIndex(0);
+      const source = mapRef.current?.getSource("route") as mapboxgl.GeoJSONSource | undefined;
+      source?.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } });
+    } else void routeStops(nextStops);
+  }
+
+  undoRef.current = () => removeStop(stopsRef.current.length - 1);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); undoRef.current(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   function resetRoute() {
     stopsRef.current = []; setStops([]); setRoutes([]); setRouteIndex(0); setSelectedId(null); setError("");
     stopMarkers.current.forEach((marker) => marker.remove()); stopMarkers.current = [];
     curveMarkers.current.forEach((marker) => marker.remove()); curveMarkers.current = [];
     const source = mapRef.current?.getSource("route") as mapboxgl.GeoJSONSource | undefined;
     source?.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } });
+    const curvesSource = mapRef.current?.getSource("curve-segments") as mapboxgl.GeoJSONSource | undefined;
+    curvesSource?.setData({ type: "FeatureCollection", features: [] });
   }
 
   useEffect(() => {
@@ -79,7 +110,14 @@ export default function Home() {
     map.on("load", () => {
       map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
       map.addLayer({ id: "route-line", type: "line", source: "route", paint: { "line-color": "#101b1e", "line-width": 5, "line-opacity": .94 } });
-      map.on("click", (event) => addStop([event.lngLat.lng, event.lngLat.lat]));
+      map.addSource("curve-segments", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({ id: "curve-line", type: "line", source: "curve-segments", paint: { "line-color": ["match", ["get", "direction"], "left", "#2878ee", "right", "#e34242", "#101b1e"], "line-width": 6, "line-opacity": .98 } });
+      map.on("click", (event) => {
+        const curveFeature = map.queryRenderedFeatures(event.point, { layers: ["curve-line"] })[0];
+        const curveId = curveFeature?.properties?.id as string | undefined;
+        const curve = routeRef.current?.curves.find((item) => item.id === curveId);
+        if (curve) selectCurve(curve); else addStop([event.lngLat.lng, event.lngLat.lat]);
+      });
     });
     mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
@@ -87,15 +125,20 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapToken]);
 
+  const routeRef = useRef<RouteResult | undefined>(undefined);
+  routeRef.current = route;
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !route || !map.isStyleLoaded()) return;
     const source = map.getSource("route") as mapboxgl.GeoJSONSource | undefined;
     source?.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: route.coordinates } });
+    const curvesSource = map.getSource("curve-segments") as mapboxgl.GeoJSONSource | undefined;
+    curvesSource?.setData({ type: "FeatureCollection", features: route.curves.map((curve) => ({ type: "Feature", properties: { id: curve.id, direction: curve.direction }, geometry: { type: "LineString", coordinates: curve.coordinates } })) });
     curveMarkers.current.forEach((marker) => marker.remove());
     curveMarkers.current = route.curves.map((curve, index) => {
       const element = document.createElement("button"); element.className = "curve-marker"; element.innerText = String(index + 1);
-      element.onclick = () => selectCurve(curve);
+      element.onclick = (event) => { event.stopPropagation(); selectCurve(curve); };
       return new mapboxgl.Marker({ element }).setLngLat(curve.start).addTo(map);
     });
   }, [route]);
@@ -114,6 +157,7 @@ export default function Home() {
       <p className="intro">Click the map to place a start, then an end. Keep clicking to turn the previous end into a waypoint and extend the route.</p>
       <div className="click-status"><span>{stops.length === 0 ? "1" : stops.length + 1}</span><p>{stops.length === 0 ? "Click anywhere to set your start." : stops.length === 1 ? "Click again to set the end." : `${stops.length - 2} waypoint${stops.length === 3 ? "" : "s"} · click to extend`}</p></div>
       <button className="reset" onClick={resetRoute} disabled={stops.length === 0}>Clear route</button>
+      <p className="shortcut">Ctrl / ⌘ + Z removes the last point. Click any point to remove it.</p>
       {loading && <p className="setup-note">Snapping to the road…</p>}
       {error && <p className="error" role="alert">{error}</p>}
       {!mapToken && tokenLoaded && <p className="error">Mapbox is not configured.</p>}

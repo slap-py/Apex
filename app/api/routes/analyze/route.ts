@@ -26,9 +26,10 @@ export async function POST(request: Request) {
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${stops.map((point) => point.join(",")).join(";")}?alternatives=true&geometries=geojson&overview=full&steps=false&access_token=${token}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error("Mapbox could not calculate a driving route for those locations.");
-    const data = await response.json() as { routes?: Array<{ distance: number; duration: number; geometry: { coordinates: Coordinate[] } }> };
+    const data = await response.json() as { routes?: Array<{ distance: number; duration: number; geometry: { coordinates: Coordinate[] } }>; waypoints?: Array<{ location?: Coordinate }> };
     if (!data.routes?.length) throw new Error("No driving route was found.");
-    return NextResponse.json({ routes: data.routes.map((route, index) => ({ id: `route-${index + 1}`, coordinates: route.geometry.coordinates, distanceMeters: Math.round(route.distance), durationSeconds: Math.round(route.duration), curves: analyzeCurves(route.geometry.coordinates) })) });
+    const snappedStops = data.waypoints?.map((waypoint) => waypoint.location).filter((location): location is Coordinate => Boolean(location)) || stops;
+    return NextResponse.json({ snappedStops, routes: data.routes.map((route, index) => ({ id: `route-${index + 1}`, coordinates: route.geometry.coordinates, distanceMeters: Math.round(route.distance), durationSeconds: Math.round(route.duration), curves: analyzeCurves(route.geometry.coordinates) })) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to analyze route." }, { status: 500 });
   }
