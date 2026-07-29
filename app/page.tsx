@@ -8,6 +8,7 @@ import { colorizeRoute, routeCurveMidpoint, type Coordinate, type CurveSegment }
 type RoadEvent = { id: string; type: "stop" | "signal" | "arterial"; coordinate: Coordinate; name?: string };
 type RouteResult = { id: string; coordinates: Coordinate[]; distanceMeters: number; durationSeconds: number; curves: CurveSegment[]; roadEvents?: RoadEvent[]; elevations?: number[] };
 const metres = (value: number) => `${Math.round(value)} m`;
+const feet = (value: number) => Math.round(value * 3.28084);
 const miles = (value: number) => `${(value / 1609.344).toFixed(1)} mi`;
 const duration = (value: number) => `${Math.floor(value / 60)} min`;
 
@@ -30,8 +31,20 @@ export default function Home() {
   const [error, setError] = useState("");
   const [showWaypoints, setShowWaypoints] = useState(true);
   const [showCurveMarkers, setShowCurveMarkers] = useState(true);
+  const [showMapRallyLabels, setShowMapRallyLabels] = useState(false);
   const [elevationIndex, setElevationIndex] = useState(0);
   const route = routes[routeIndex];
+
+  function curveModifier(curve: CurveSegment) {
+    const elevation = route?.elevations || [];
+    if (elevation.length < 3 || !route) return "";
+    const start = Math.max(0, Math.round((curve.routeStartMeters / Math.max(1, route.distanceMeters)) * (elevation.length - 1)));
+    const end = Math.min(elevation.length - 1, Math.round((curve.routeEndMeters / Math.max(1, route.distanceMeters)) * (elevation.length - 1)));
+    const delta = elevation[end] - elevation[start];
+    return delta <= -8 ? "D" : delta >= 8 ? "B" : "";
+  }
+
+  function curveMapLabel(curve: CurveSegment) { return `${curve.direction === "left" ? "L" : "R"}${curve.rating}${curveModifier(curve)}`; }
 
   useEffect(() => {
     fetch("/api/config/mapbox").then((response) => response.json()).then((data: { token?: string | null }) => setMapToken(data.token || null)).catch(() => setMapToken(null)).finally(() => setTokenLoaded(true));
@@ -68,7 +81,7 @@ export default function Home() {
         setStops(result.snappedStops);
         renderStopMarkers(result.snappedStops);
       }
-      setRoutes(result.routes); setRouteIndex(0);
+      setRoutes(result.routes); setRouteIndex(0); setElevationIndex(0);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to snap this route to roads."); }
     finally { setLoading(false); }
   }
@@ -159,11 +172,13 @@ export default function Home() {
     }
     curveMarkers.current.forEach((marker) => marker.remove());
     curveMarkers.current = showCurveMarkers ? route.curves.map((curve, index) => {
-      const element = document.createElement("button"); element.className = "curve-marker"; element.innerText = String(index + 1);
+      const element = document.createElement("button"); element.className = "curve-marker"; element.innerText = showMapRallyLabels ? curveMapLabel(curve) : String(index + 1);
       element.onclick = (event) => { event.stopPropagation(); selectCurve(curve); };
       return new mapboxgl.Marker({ element }).setLngLat(routeCurveMidpoint(route.coordinates, curve)).addTo(map);
     }) : [];
-  }, [route, showCurveMarkers, elevationIndex]);
+  // Map marker rendering intentionally follows the selected route and display toggles.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, showCurveMarkers, showMapRallyLabels, elevationIndex]);
 
   function selectCurve(curve: CurveSegment) {
     setSelectedId(curve.id);
@@ -184,6 +199,8 @@ export default function Home() {
     if (!context) return;
     context.fillStyle = "#f0f0e8"; context.fillRect(0, 0, width, canvas.height);
     context.drawImage(mapCanvas, 0, 0, width, mapHeight);
+    context.fillStyle = "rgba(10,21,24,.88)"; context.fillRect(width - 330, 24, 282, 58);
+    context.fillStyle = "#dbff52"; context.font = "700 18px sans-serif"; context.fillText("↝  APEX PACE NOTES", width - 305, 60);
     context.fillStyle = "#102023"; context.fillRect(0, mapHeight, width, canvas.height - mapHeight);
     context.fillStyle = "#dbff52"; context.font = "700 28px sans-serif"; context.fillText("APEX PACE NOTES", 54, mapHeight + 54);
     context.fillStyle = "#eaf0e9"; context.font = "600 22px sans-serif"; context.fillText(`${miles(route.distanceMeters)} · ${duration(route.durationSeconds)} · ${route.curves.length} curves`, 54, mapHeight + 94);
@@ -210,15 +227,15 @@ export default function Home() {
     <section className="map-area">
       <div ref={mapNode} className="map" aria-label="Route map. Click to place route points." />
       {tokenLoaded && !mapToken && <div className="map-placeholder"><span>MAPBOX REQUIRED</span><p>Add the project’s Mapbox environment variables to enable map clicks and route planning.</p></div>}
-      {route && <div className="route-summary"><span>FASTEST ROUTE</span><strong>{miles(route.distanceMeters)} <i>·</i> {duration(route.durationSeconds)}</strong><small>{route.curves.length} detected curves</small>{routes.length > 1 && <select value={routeIndex} onChange={(event) => { setRouteIndex(Number(event.target.value)); setSelectedId(null); }} aria-label="Choose route alternative">{routes.map((option, index) => <option value={index} key={option.id}>Option {index + 1} · {duration(option.durationSeconds)}</option>)}</select>}</div>}
-      <details className="layers"><summary>Layers</summary><label><input type="checkbox" checked={showWaypoints} onChange={(event) => setShowWaypoints(event.target.checked)} /> Waypoints</label><label><input type="checkbox" checked={showCurveMarkers} onChange={(event) => setShowCurveMarkers(event.target.checked)} /> Pace numbers</label></details>
+      {route && <div className="route-summary"><span>FASTEST ROUTE</span><strong>{miles(route.distanceMeters)} <i>·</i> {duration(route.durationSeconds)}</strong><small>{route.curves.length} detected curves</small>{routes.length > 1 && <select value={routeIndex} onChange={(event) => { setRouteIndex(Number(event.target.value)); setElevationIndex(0); setSelectedId(null); }} aria-label="Choose route alternative">{routes.map((option, index) => <option value={index} key={option.id}>Option {index + 1} · {duration(option.durationSeconds)}</option>)}</select>}</div>}
+      <details className="layers"><summary>Layers</summary><label><input type="checkbox" checked={showWaypoints} onChange={(event) => setShowWaypoints(event.target.checked)} /> Waypoints</label><label><input type="checkbox" checked={showCurveMarkers} onChange={(event) => setShowCurveMarkers(event.target.checked)} /> Pace numbers</label><label><input type="checkbox" checked={showMapRallyLabels} onChange={(event) => setShowMapRallyLabels(event.target.checked)} /> Map rally labels</label></details>
       {route && <button className="export-route" onClick={exportRoute}>Export route PNG</button>}
-      {route?.elevations?.length ? <div className="elevation-card"><span>ELEVATION PROFILE</span><svg viewBox="0 0 300 74" role="img" aria-label="Elevation profile"><polyline points={route.elevations.map((value, index) => `${(index / Math.max(1, route.elevations!.length - 1)) * 300},${70 - ((value - Math.min(...route.elevations!)) / Math.max(1, Math.max(...route.elevations!) - Math.min(...route.elevations!))) * 58}`).join(" ")} /><circle cx={(elevationIndex / Math.max(1, route.elevations.length - 1)) * 300} cy={70 - ((route.elevations[elevationIndex] - Math.min(...route.elevations)) / Math.max(1, Math.max(...route.elevations) - Math.min(...route.elevations))) * 58} r="5" /></svg><input type="range" min="0" max={Math.max(0, route.elevations.length - 1)} value={elevationIndex} onChange={(event) => setElevationIndex(Number(event.target.value))} aria-label="Scrub elevation profile" /><small>{route.elevations[elevationIndex] ?? route.elevations[0]} m</small></div> : null}
-      {selected && <article className="curve-card"><span>CURVE {route!.curves.findIndex((curve) => curve.id === selected.id) + 1}</span><h2>{selected.label}</h2><dl><div><dt>Length</dt><dd>{metres(selected.lengthMeters)}</dd></div><div><dt>Heading</dt><dd>{Math.round(selected.headingChangeDegrees)}°</dd></div><div><dt>Modifier</dt><dd>None</dd></div></dl></article>}
+      {route?.elevations?.length ? <div className="elevation-card"><span>ELEVATION PROFILE</span><strong className="elevation-readout">{feet(route.elevations[elevationIndex] ?? route.elevations[0])} ft</strong><svg viewBox="0 0 300 74" role="img" aria-label="Elevation profile" onMouseMove={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setElevationIndex(Math.max(0, Math.min(route.elevations!.length - 1, Math.round(((event.clientX - rect.left) / rect.width) * (route.elevations!.length - 1))))); }}><polyline points={route.elevations.map((value, index) => `${(index / Math.max(1, route.elevations!.length - 1)) * 300},${70 - ((value - Math.min(...route.elevations!)) / Math.max(1, Math.max(...route.elevations!) - Math.min(...route.elevations!))) * 58}`).join(" ")} /><circle cx={(elevationIndex / Math.max(1, route.elevations.length - 1)) * 300} cy={70 - ((route.elevations[elevationIndex] - Math.min(...route.elevations)) / Math.max(1, Math.max(...route.elevations) - Math.min(...route.elevations))) * 58} r="5" /></svg><small>Hover the profile to scrub</small></div> : null}
+      {selected && <article className="curve-card"><span>CURVE {route!.curves.findIndex((curve) => curve.id === selected.id) + 1}</span><h2>{selected.label}{curveModifier(selected) === "D" ? " dip" : curveModifier(selected) === "B" ? " bump" : ""}</h2><dl><div><dt>Length</dt><dd>{metres(selected.lengthMeters)}</dd></div><div><dt>Heading</dt><dd>{Math.round(selected.headingChangeDegrees)}°</dd></div><div><dt>Modifier</dt><dd>{curveModifier(selected) === "D" ? "Dip" : curveModifier(selected) === "B" ? "Bump" : "None"}</dd></div></dl></article>}
     </section>
     <aside className="curve-list" aria-label="Detected curves">
       <div className="list-heading"><span>PACE NOTES</span><strong>{route ? `${route.curves.length} calls` : "Awaiting route"}</strong></div>
-      <div className="scrolling-notes">{route ? <>{(route.roadEvents || []).map((event) => <div className="context-row" key={event.id}><b>{event.type === "stop" ? "STOP" : event.type === "signal" ? "LIGHT" : "ROAD"}</b><span><strong>{event.name || (event.type === "stop" ? "Stop sign" : event.type === "signal" ? "Traffic signal" : "Major intersection")}</strong><small>Road context</small></span></div>)}{route.curves.map((curve, index) => <button key={curve.id} className={selectedId === curve.id ? "curve-row active" : "curve-row"} onClick={() => selectCurve(curve)}><b>{String(index + 1).padStart(2, "0")}</b><span><strong>{curve.label}</strong><small>{metres(curve.lengthMeters)} · {Math.round(curve.headingChangeDegrees)}°</small></span><i>{curve.direction === "left" ? "↙" : "↘"}</i></button>)}</> : <div className="empty-list">Your route’s curve calls will appear here in driving order.</div>}</div>
+      <div className="scrolling-notes">{route ? <>{(route.roadEvents || []).map((event) => <div className="context-row" key={event.id}><b>{event.type === "stop" ? "STOP" : event.type === "signal" ? "LIGHT" : "ROAD"}</b><span><strong>{event.name || (event.type === "stop" ? "Stop sign" : event.type === "signal" ? "Traffic signal" : "Major intersection")}</strong><small>Road context</small></span></div>)}{route.curves.map((curve, index) => <button key={curve.id} className={selectedId === curve.id ? "curve-row active" : "curve-row"} onClick={() => selectCurve(curve)}><b>{String(index + 1).padStart(2, "0")}</b><span><strong>{curve.label}{curveModifier(curve) === "D" ? " dip" : curveModifier(curve) === "B" ? " bump" : ""}</strong><small>{metres(curve.lengthMeters)} · {Math.round(curve.headingChangeDegrees)}°</small></span><i>{curve.direction === "left" ? "↙" : "↘"}</i></button>)}</> : <div className="empty-list">Your route’s curve calls will appear here in driving order.</div>}</div>
     </aside>
   </main>;
 }
