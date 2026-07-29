@@ -72,7 +72,9 @@ export default function Home() {
   useEffect(() => {
     if (!mapNode.current || !mapToken || mapRef.current) return;
     mapboxgl.accessToken = mapToken;
-    const map = new mapboxgl.Map({ container: mapNode.current, style: "mapbox://styles/mapbox/navigation-night-v1", center: [-122.4194, 37.7749], zoom: 10, attributionControl: false });
+    // Use the core Streets style: the navigation style requests optional live
+    // traffic/incident tiles that can fail independently and leave an empty canvas.
+    const map = new mapboxgl.Map({ container: mapNode.current, style: "mapbox://styles/mapbox/streets-v12", center: [-122.4194, 37.7749], zoom: 10, attributionControl: false });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "bottom-right");
     map.on("load", () => {
       map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } } });
