@@ -13,7 +13,7 @@ test("server renders the route curve planner", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>Apex Pace Notes<\/title>/i);
-  assert.match(html, /Generate pace notes/);
+  assert.match(html, /Click anywhere to set your start/);
   assert.match(html, /Route intelligence/);
   assert.doesNotMatch(html, /codex-preview|loading skeleton/i);
 });

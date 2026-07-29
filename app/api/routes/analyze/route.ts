@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { analyzeCurves, type Coordinate } from "../../../../lib/curves";
 
-type RouteRequest = { start?: string; end?: string; waypoints?: string[]; coordinates?: Coordinate[] };
+type RouteRequest = { start?: string; end?: string; waypoints?: string[]; coordinates?: Coordinate[]; stops?: Coordinate[] };
 
 async function geocode(query: string, token: string): Promise<Coordinate> {
   const url = `https://api.mapbox.com/search/geocode/v6/forward?q=${encodeURIComponent(query)}&limit=1&access_token=${token}`;
@@ -19,10 +19,10 @@ export async function POST(request: Request) {
     if (body.coordinates?.length && body.coordinates.length > 1) {
       return NextResponse.json({ route: { coordinates: body.coordinates, distanceMeters: null, durationSeconds: null }, curves: analyzeCurves(body.coordinates) });
     }
-    if (!body.start?.trim() || !body.end?.trim()) return NextResponse.json({ error: "Enter a start and end location." }, { status: 400 });
+    if ((!body.stops || body.stops.length < 2) && (!body.start?.trim() || !body.end?.trim())) return NextResponse.json({ error: "Place a start and end point on the map." }, { status: 400 });
     const token = process.env.MAPBOX_ACCESS_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
     if (!token) return NextResponse.json({ error: "Mapbox is not configured yet. Add MAPBOX_ACCESS_TOKEN to the site environment." }, { status: 503 });
-    const stops = await Promise.all([body.start, ...(body.waypoints || []).filter(Boolean), body.end].map((place) => geocode(place, token)));
+    const stops = body.stops?.length ? body.stops : await Promise.all([body.start!, ...(body.waypoints || []).filter(Boolean), body.end!].map((place) => geocode(place, token)));
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${stops.map((point) => point.join(",")).join(";")}?alternatives=true&geometries=geojson&overview=full&steps=false&access_token=${token}`;
     const response = await fetch(url);
     if (!response.ok) throw new Error("Mapbox could not calculate a driving route for those locations.");
