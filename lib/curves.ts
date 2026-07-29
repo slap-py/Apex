@@ -184,3 +184,17 @@ export function colorizeRoute(coordinates: Coordinate[], curves: CurveSegment[])
 export function curveMidpoint(curve: CurveSegment): Coordinate {
   return curve.coordinates[Math.floor(curve.coordinates.length / 2)] || curve.start;
 }
+
+export function routeCurveMidpoint(route: Coordinate[], curve: CurveSegment): Coordinate {
+  const target = (curve.routeStartMeters + curve.routeEndMeters) / 2;
+  let travelled = 0;
+  for (let index = 1; index < route.length; index += 1) {
+    const segment = distanceMeters(route[index - 1], route[index]);
+    if (travelled + segment >= target) {
+      const ratio = segment ? (target - travelled) / segment : 0;
+      return [route[index - 1][0] + (route[index][0] - route[index - 1][0]) * ratio, route[index - 1][1] + (route[index][1] - route[index - 1][1]) * ratio];
+    }
+    travelled += segment;
+  }
+  return route[route.length - 1] || curve.start;
+}
