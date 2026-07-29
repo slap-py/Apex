@@ -119,7 +119,7 @@ export default function Home() {
     mapboxgl.accessToken = mapToken;
     // Use the core Streets style: the navigation style requests optional live
     // traffic/incident tiles that can fail independently and leave an empty canvas.
-    const map = new mapboxgl.Map({ container: mapNode.current, style: "mapbox://styles/mapbox/streets-v12", center: [-122.4194, 37.7749], zoom: 10, attributionControl: false });
+    const map = new mapboxgl.Map({ container: mapNode.current, style: "mapbox://styles/mapbox/streets-v12", center: [-122.4194, 37.7749], zoom: 10, attributionControl: false, preserveDrawingBuffer: true });
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "bottom-right");
     map.on("load", () => {
       map.addSource("route-segments", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
