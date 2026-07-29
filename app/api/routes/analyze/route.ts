@@ -1,9 +1,25 @@
 import { NextResponse } from "next/server";
-import { analyzeCurves, type Coordinate, distanceMeters } from "../../../../lib/curves";
+import { analyzeCurves, type Coordinate } from "../../../../lib/curves";
 
 type RouteRequest = { start?: string; end?: string; waypoints?: string[]; coordinates?: Coordinate[]; stops?: Coordinate[] };
 
 type RoadEvent = { id: string; type: "stop" | "signal" | "arterial"; coordinate: Coordinate; name?: string };
+
+async function fetchElevation(coordinates: Coordinate[]): Promise<number[]> {
+  const stride = Math.max(1, Math.floor(coordinates.length / 80));
+  const samples = coordinates.filter((_, index) => index % stride === 0).slice(0, 100);
+  if (!samples.length) return [];
+  const locations = samples.map(([lon, lat]) => `${lat},${lon}`).join("|");
+  for (const endpoint of ["https://api.opentopodata.org/v1/aster30m", "https://api.open-elevation.com/api/v1/lookup"]) {
+    try {
+      const response = await fetch(`${endpoint}?locations=${encodeURIComponent(locations)}`);
+      if (!response.ok) continue;
+      const data = await response.json() as { results?: Array<{ elevation?: number }> };
+      if (data.results?.length) return data.results.map((result) => Math.round(result.elevation || 0));
+    } catch { /* try the next free source */ }
+  }
+  return [];
+}
 
 async function fetchRoadEvents(coordinates: Coordinate[]): Promise<RoadEvent[]> {
   if (coordinates.length < 2) return [];
@@ -12,9 +28,14 @@ async function fetchRoadEvents(coordinates: Coordinate[]): Promise<RoadEvent[]> 
   const around = samples.map(([lon, lat]) => `node(around:35,${lat},${lon})[highway~"^(stop|traffic_signals)$"];way(around:50,${lat},${lon})[highway~"^(primary|secondary|tertiary)$"][name];`).join("");
   const query = `[out:json][timeout:12];(${around});out center tags;`;
   try {
-    const response = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query, headers: { "Content-Type": "text/plain" } });
-    if (!response.ok) return [];
-    const data = await response.json() as { elements?: Array<{ id: number; type: string; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: { highway?: string; name?: string } }> };
+    let data: { elements?: Array<{ id: number; type: string; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: { highway?: string; name?: string } }> } | null = null;
+    for (const endpoint of ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]) {
+      try {
+        const response = await fetch(endpoint, { method: "POST", body: query, headers: { "Content-Type": "text/plain" } });
+        if (response.ok) { data = await response.json() as typeof data; break; }
+      } catch { /* try the fallback endpoint */ }
+    }
+    if (!data) return [];
     const events: RoadEvent[] = [];
     for (const element of data.elements || []) {
       const point = element.lat !== undefined && element.lon !== undefined ? [element.lon, element.lat] as Coordinate : element.center ? [element.center.lon, element.center.lat] as Coordinate : null;
@@ -54,22 +75,8 @@ export async function POST(request: Request) {
     if (!data.routes?.length) throw new Error("No driving route was found.");
     const snappedStops = data.waypoints?.map((waypoint) => waypoint.location).filter((location): location is Coordinate => Boolean(location)) || stops;
     const events = await fetchRoadEvents(data.routes[0].geometry.coordinates);
-    return NextResponse.json({ snappedStops, roadEvents: events, routes: data.routes.map((route, index) => {
-      const rawLimits = route.legs?.flatMap((leg) => leg.annotation?.maxspeed || []) || [];
-      const speedChanges: Array<{ coordinate: Coordinate; mph: number; routeDistanceMeters: number }> = [];
-      let previousMph: number | null = null;
-      rawLimits.forEach((limit, limitIndex) => {
-        if (limit.speed === undefined || limit.speed === null) return;
-        const mph = Math.round((limit.unit || "km/h").toLowerCase().includes("mph") ? limit.speed : limit.speed * 0.621371);
-        if (mph === previousMph) return;
-        previousMph = mph;
-        const geometryIndex = Math.min(route.geometry.coordinates.length - 1, Math.round((limitIndex / Math.max(1, rawLimits.length - 1)) * (route.geometry.coordinates.length - 1)));
-        const coordinate = route.geometry.coordinates[geometryIndex];
-        const routeDistanceMeters = route.geometry.coordinates.slice(1, geometryIndex + 1).reduce((total, point, pointIndex) => total + distanceMeters(route.geometry.coordinates[pointIndex], point), 0);
-        speedChanges.push({ coordinate, mph, routeDistanceMeters: Math.round(routeDistanceMeters) });
-      });
-      return { id: `route-${index + 1}`, coordinates: route.geometry.coordinates, distanceMeters: Math.round(route.distance), durationSeconds: Math.round(route.duration), curves: analyzeCurves(route.geometry.coordinates), speedChanges };
-    }) });
+    const elevations = await fetchElevation(data.routes[0].geometry.coordinates);
+    return NextResponse.json({ snappedStops, roadEvents: events, routes: data.routes.map((route, index) => ({ id: `route-${index + 1}`, coordinates: route.geometry.coordinates, distanceMeters: Math.round(route.distance), durationSeconds: Math.round(route.duration), curves: analyzeCurves(route.geometry.coordinates), elevations: index === 0 ? elevations : [] })) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to analyze route." }, { status: 500 });
   }

@@ -106,9 +106,15 @@ export function analyzeCurves(input: Coordinate[], options: Partial<CurveAnalysi
   const segments: Array<{ startIndex: number; endIndex: number; direction: CurveDirection; change: number }> = [];
   let active: (typeof segments)[number] | null = null;
   let pendingChange = 0;
+  let quietCount = 0;
   for (let index = 1; index < headings.length; index += 1) {
     const change = signedAngle(headings[index - 1], headings[index]);
-    if (Math.abs(change) < 1.15) continue;
+    if (Math.abs(change) < 1.15) {
+      quietCount += 1;
+      if (active && quietCount >= 2) { segments.push(active); active = null; pendingChange = 0; }
+      continue;
+    }
+    quietCount = 0;
     const direction: CurveDirection = change < 0 ? "left" : "right";
     if (active && active.direction === direction) {
       active.endIndex = index + 1;
