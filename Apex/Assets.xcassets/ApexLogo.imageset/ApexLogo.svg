@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <circle cx="64" cy="64" r="64" fill="#102023"/>
+  <text x="64" y="82" text-anchor="middle" font-family="Arial Rounded MT Bold, Arial" font-size="62" font-weight="700" fill="#DBFF52">↝</text>
+</svg>

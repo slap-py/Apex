@@ -1,0 +1,7 @@
+# Local credentials and machine-specific files
+Config/Secrets.xcconfig.local
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
